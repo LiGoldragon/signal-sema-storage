@@ -421,6 +421,10 @@ impl Wire {
             .map_err(|error| CodecError::Encode(error.to_string()))
     }
 
+    pub fn frame_current_handshake_request() -> Result<Vec<u8>, CodecError> {
+        Self::frame_handshake_request(signal_frame::SIGNAL_FRAME_PROTOCOL_VERSION)
+    }
+
     pub fn frame_handshake_request(version: ProtocolVersion) -> Result<Vec<u8>, CodecError> {
         ExchangeFrame::<Vec<u8>, Vec<u8>>::new(ExchangeFrameBody::HandshakeRequest(
             HandshakeRequest::new(version),
