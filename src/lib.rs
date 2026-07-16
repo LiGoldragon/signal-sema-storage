@@ -520,3 +520,8 @@ pub enum FrameMessage {
         payload: Vec<u8>,
     },
 }
+impl FrameMessage {
+    pub fn is_accepted_handshake(&self) -> bool {
+        matches!(self, Self::HandshakeReply(HandshakeReply::Accepted(_)))
+    }
+}
