@@ -6,6 +6,11 @@ use core_logos::CoreItem;
 use core_schema::CoreSchema;
 use name_table::Identifier;
 use rkyv::{Archive, Deserialize, Serialize};
+use signal_frame::{
+    ExchangeFrame, ExchangeFrameBody, ExchangeIdentifier, ExchangeLane, HandshakeRejectionReason,
+    HandshakeReply, HandshakeRequest, LaneSequence, NonEmpty, ProtocolVersion, Reply as FrameReply,
+    SessionEpoch, ShortHeader, SubReply,
+};
 
 pub struct DocumentPayloadDomain;
 impl HashDomain for DocumentPayloadDomain {
@@ -303,18 +308,15 @@ impl DocumentPayload {
         Ok(ContentHash(hasher.finalize_bytes()))
     }
 
-    fn hash_archived<Value>(
-        hasher: &mut IdentityHasher,
-        value: &Value,
-    ) -> Result<(), CodecError>
+    fn hash_archived<Value>(hasher: &mut IdentityHasher, value: &Value) -> Result<(), CodecError>
     where
         Value: for<'archive> Serialize<
-                rkyv::api::high::HighSerializer<
-                    rkyv::util::AlignedVec,
-                    rkyv::ser::allocator::ArenaHandle<'archive>,
-                    rkyv::rancor::Error,
-                >,
+            rkyv::api::high::HighSerializer<
+                rkyv::util::AlignedVec,
+                rkyv::ser::allocator::ArenaHandle<'archive>,
+                rkyv::rancor::Error,
             >,
+        >,
     {
         let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(value)
             .map_err(|error| CodecError::Encode(error.to_string()))?;
@@ -418,4 +420,99 @@ impl Wire {
             .map(|bytes| bytes.to_vec())
             .map_err(|error| CodecError::Encode(error.to_string()))
     }
+
+    pub fn frame_handshake_request(version: ProtocolVersion) -> Result<Vec<u8>, CodecError> {
+        ExchangeFrame::<Vec<u8>, Vec<u8>>::new(ExchangeFrameBody::HandshakeRequest(
+            HandshakeRequest::new(version),
+        ))
+        .encode_length_prefixed()
+        .map_err(|error| CodecError::Encode(error.to_string()))
+    }
+
+    pub fn frame_handshake_reply(reply: HandshakeReply) -> Result<Vec<u8>, CodecError> {
+        ExchangeFrame::<Vec<u8>, Vec<u8>>::new(ExchangeFrameBody::HandshakeReply(reply))
+            .encode_length_prefixed()
+            .map_err(|error| CodecError::Encode(error.to_string()))
+    }
+
+    pub fn frame_request(payload: Vec<u8>, sequence: u64) -> Result<Vec<u8>, CodecError> {
+        let exchange = ExchangeIdentifier::new(
+            SessionEpoch::new(0),
+            ExchangeLane::Connector,
+            LaneSequence::new(sequence),
+        );
+        ExchangeFrame::<Vec<u8>, Vec<u8>>::with_short_header(
+            ShortHeader::empty(),
+            ExchangeFrameBody::Request {
+                exchange,
+                request: signal_frame::Request::from_payload(payload),
+            },
+        )
+        .encode_length_prefixed()
+        .map_err(|error| CodecError::Encode(error.to_string()))
+    }
+
+    pub fn frame_reply(
+        exchange: ExchangeIdentifier,
+        payload: Vec<u8>,
+    ) -> Result<Vec<u8>, CodecError> {
+        ExchangeFrame::<Vec<u8>, Vec<u8>>::new(ExchangeFrameBody::Reply {
+            exchange,
+            reply: FrameReply::committed(NonEmpty::single(SubReply::Ok(payload))),
+        })
+        .encode_length_prefixed()
+        .map_err(|error| CodecError::Encode(error.to_string()))
+    }
+
+    pub fn decode_frame(bytes: &[u8]) -> Result<FrameMessage, CodecError> {
+        let frame = ExchangeFrame::<Vec<u8>, Vec<u8>>::decode_length_prefixed(bytes)
+            .map_err(|error| CodecError::Decode(error.to_string()))?;
+        match frame.into_body() {
+            ExchangeFrameBody::HandshakeRequest(request) => {
+                Ok(FrameMessage::HandshakeRequest(request.version()))
+            }
+            ExchangeFrameBody::HandshakeReply(reply) => Ok(FrameMessage::HandshakeReply(reply)),
+            ExchangeFrameBody::Request { exchange, request } => Ok(FrameMessage::Request {
+                exchange,
+                payload: request.payloads().head().clone(),
+            }),
+            ExchangeFrameBody::Reply { exchange, reply } => match reply {
+                FrameReply::Accepted { per_operation, .. } => match per_operation.head() {
+                    SubReply::Ok(payload) => Ok(FrameMessage::Reply {
+                        exchange,
+                        payload: payload.clone(),
+                    }),
+                    _ => Err(CodecError::Decode(
+                        "frame operation was not committed".into(),
+                    )),
+                },
+                FrameReply::Rejected { .. } => {
+                    Err(CodecError::Decode("frame request was rejected".into()))
+                }
+            },
+        }
+    }
+
+    pub fn handshake_reply(peer: ProtocolVersion) -> HandshakeReply {
+        let local = signal_frame::SIGNAL_FRAME_PROTOCOL_VERSION;
+        if local.accepts(peer) {
+            HandshakeReply::Accepted(local)
+        } else {
+            HandshakeReply::Rejected(HandshakeRejectionReason::IncompatibleVersion { local, peer })
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum FrameMessage {
+    HandshakeRequest(ProtocolVersion),
+    HandshakeReply(HandshakeReply),
+    Request {
+        exchange: ExchangeIdentifier,
+        payload: Vec<u8>,
+    },
+    Reply {
+        exchange: ExchangeIdentifier,
+        payload: Vec<u8>,
+    },
 }
