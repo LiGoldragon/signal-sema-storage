@@ -1,0 +1,20 @@
+[package]
+name="signal-sema-storage"
+version="0.1.0"
+edition="2024"
+rust-version="1.89"
+license="MIT OR Apache-2.0"
+repository="https://github.com/LiGoldragon/signal-sema-storage"
+description="Typed wire contract for the central language-engine Sema storage daemon"
+[dependencies]
+blake3="1"
+rkyv={version="0.8",features=["bytecheck"]}
+core-schema={git="https://github.com/LiGoldragon/core-schema.git",rev="566544eda56a52fb1b5185d8c634dd9a9f2a47e0"}
+core-nomos={git="https://github.com/LiGoldragon/core-nomos.git",rev="88a1ecf552727b2037263423da8a4af0e65619e1"}
+core-logos={git="https://github.com/LiGoldragon/core-logos.git",rev="17cbd7596df203e0717fe079b7688cc60ec05e4b"}
+name-table={git="https://github.com/LiGoldragon/name-table.git",rev="c3237f77c087e6feab49d6cf34971cebc14a11e6"}
+thiserror="2"
+[dev-dependencies]
+tempfile="3"
+[lints.rust]
+unsafe_code="forbid"
