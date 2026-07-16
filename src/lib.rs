@@ -1,12 +1,21 @@
 //! Typed binary contract for the prototype's central, standalone Sema daemon.
 use std::collections::BTreeSet;
 
+use content_identity::{DomainSeparation, HashDomain, IdentityHasher, LayoutVersion};
 use core_logos::CoreItem;
 use core_schema::CoreSchema;
 use name_table::Identifier;
 use rkyv::{Archive, Deserialize, Serialize};
 
-pub const WIRE_VERSION: u16 = 2;
+pub struct DocumentPayloadDomain;
+impl HashDomain for DocumentPayloadDomain {
+    fn separation() -> DomainSeparation {
+        DomainSeparation::Contextual {
+            context: "language-engine/document-payload",
+            layout: LayoutVersion::new(1),
+        }
+    }
+}
 
 #[derive(
     Archive, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash,
@@ -164,6 +173,50 @@ impl SemaStorageRoot {
     }
 }
 
+#[derive(Archive, Serialize)]
+struct SignalContractCore {
+    contract: Identifier,
+    streams: Vec<StreamDeclaration>,
+    opens: Vec<OpensRelation>,
+    belongs: Vec<BelongsRelation>,
+}
+impl From<&SignalContractRoot> for SignalContractCore {
+    fn from(root: &SignalContractRoot) -> Self {
+        Self {
+            contract: root.contract,
+            streams: root.streams.clone(),
+            opens: root.opens.clone(),
+            belongs: root.belongs.clone(),
+        }
+    }
+}
+
+#[derive(Archive, Serialize)]
+struct NexusRuntimeCore {
+    actors: Vec<NexusActorDeclaration>,
+    routes: Vec<NexusRoute>,
+}
+impl From<&NexusRuntimeRoot> for NexusRuntimeCore {
+    fn from(root: &NexusRuntimeRoot) -> Self {
+        Self {
+            actors: root.actors.clone(),
+            routes: root.routes.clone(),
+        }
+    }
+}
+
+#[derive(Archive, Serialize)]
+struct SemaStorageCore {
+    families: Vec<FamilyDeclaration>,
+}
+impl From<&SemaStorageRoot> for SemaStorageCore {
+    fn from(root: &SemaStorageRoot) -> Self {
+        Self {
+            families: root.families.clone(),
+        }
+    }
+}
+
 #[derive(Archive, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RootViolation {
     DuplicateStream,
@@ -220,9 +273,53 @@ impl DocumentPayload {
     }
 
     pub fn content_hash(&self) -> Result<ContentHash, CodecError> {
-        let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(self)
+        let mut hasher = DocumentPayloadDomain::separation().begin();
+        match self {
+            Self::TypeSchema { schema, .. } => {
+                hasher.update_raw(&[0]);
+                Self::hash_archived(&mut hasher, schema)?;
+            }
+            Self::SignalContract(root) => {
+                hasher.update_raw(&[1]);
+                Self::hash_archived(&mut hasher, &SignalContractCore::from(root))?;
+            }
+            Self::NexusRuntime(root) => {
+                hasher.update_raw(&[2]);
+                Self::hash_archived(&mut hasher, &NexusRuntimeCore::from(root))?;
+            }
+            Self::SemaStorage(root) => {
+                hasher.update_raw(&[3]);
+                Self::hash_archived(&mut hasher, &SemaStorageCore::from(root))?;
+            }
+            Self::Nomos(package) => {
+                hasher.update_raw(&[4]);
+                Self::hash_archived(&mut hasher, package)?;
+            }
+            Self::Logos { items, .. } => {
+                hasher.update_raw(&[5]);
+                Self::hash_archived(&mut hasher, items)?;
+            }
+        }
+        Ok(ContentHash(hasher.finalize_bytes()))
+    }
+
+    fn hash_archived<Value>(
+        hasher: &mut IdentityHasher,
+        value: &Value,
+    ) -> Result<(), CodecError>
+    where
+        Value: for<'archive> Serialize<
+                rkyv::api::high::HighSerializer<
+                    rkyv::util::AlignedVec,
+                    rkyv::ser::allocator::ArenaHandle<'archive>,
+                    rkyv::rancor::Error,
+                >,
+            >,
+    {
+        let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(value)
             .map_err(|error| CodecError::Encode(error.to_string()))?;
-        Ok(ContentHash(*blake3::hash(&bytes).as_bytes()))
+        hasher.update_length_prefixed(&bytes);
+        Ok(())
     }
 }
 
