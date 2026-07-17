@@ -52,6 +52,115 @@ pub struct IdentifierBlock {
     pub length: u32,
 }
 
+// ---- Identity authority (design v2, primary-56d1.11) ----
+//
+// The central Sema daemon is the one logical allocation authority per deployment
+// (settled: "seat it centrally in sema", 2026-07-17). Its whole mandate is the two
+// laws of the keystone: never re-mint an identity for the same declared thing, and
+// never rebind an existing identity to a different thing. These types name the
+// bind-or-mint operation that enforces them.
+
+/// A schema-whole's stable declared handle: the author-controlled identity the
+/// authority binds a minted universe to. Two ingestions that present the SAME handle
+/// bind the SAME universe (the keystone's anti-remint at the whole level); what the
+/// handle keys on is the caller's concern — the authority treats it as opaque bytes.
+///
+/// LEAN `whole-handle-opaque` (realizes v2 L1): schema-whole identity is an
+/// author-supplied opaque byte handle rather than an independently minted-and-returned
+/// constitutive id. Revision trigger: the psyche ruling the whole carries an
+/// independently minted identity, or that it derives from a designated root type.
+#[derive(Archive, Serialize, Deserialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SchemaWholeHandle(pub Vec<u8>);
+
+/// A minted universe identity: a globally-unique, never-reused compact u32 the
+/// authority allocates per schema-whole, the authoritative universe-id path replacing
+/// the `FIXTURE_UNIVERSE(0)` placeholder (v2 L5). Maps directly onto core-schema's
+/// `CoreUniverseId`.
+#[derive(
+    Archive, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash,
+)]
+pub struct MintedUniverse(pub u32);
+
+/// The declared key of one thing within a schema-whole — "the same declared thing."
+/// At this layer it is the declared name spelling: two ingestions of one schema name
+/// their types identically, so keying identity on the name binds parse-order-
+/// independent identities (the keystone anti-remint made operational).
+///
+/// LEAN `declared-key-is-name` (realizes v2 L4 at the authority layer): "the same
+/// declared thing" keys on the declared name spelling within its whole. Revision
+/// trigger: an authoring surface carrying an explicit per-declaration bind/mint marker
+/// distinct from the name.
+#[derive(Archive, Serialize, Deserialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct DeclaredKey(pub Vec<u8>);
+
+/// A fingerprint of a declared thing's structure, recorded alongside its identity so
+/// the authority can tell a version-advance of the same thing (§3, same id) from a
+/// genuinely different thing claiming an existing id (law 2).
+#[derive(
+    Archive, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash,
+)]
+pub struct DeclaredShape(pub [u8; 32]);
+
+/// The assigned local identity of one declared thing within its universe — the
+/// `local` half of core-schema's `ScopedCoreTypeId`. Compact and never reused within a
+/// universe.
+#[derive(
+    Archive, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash,
+)]
+pub struct TypeIdentity(pub u32);
+
+/// Whether a declared thing mints a fresh identity / binds its existing one by key, or
+/// asserts it continues a specific already-issued identity (a rename or a "move" into
+/// this whole — the §4 declared bind-existing marker). Declared, never content-inferred;
+/// the authority enforces the two laws against it. A closed typed record, never a flag.
+#[derive(Archive, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IdentityIntent {
+    /// Mint a fresh identity for a newly declared thing, or return the identity already
+    /// bound to this key (idempotent by key — law 1's anti-remint). A re-presented key
+    /// whose shape has advanced is a version edit within the one identity (§3): the id
+    /// is unchanged and the recorded shape advances.
+    MintOrBind,
+    /// Assert this declared thing IS an already-issued identity (a continuation — a
+    /// rename or move into this home). The authority enforces law 2: the claimed
+    /// identity must already name a thing whose recorded shape equals this declaration's
+    /// shape; pointing it at a structurally different thing is rejected.
+    Continue(TypeIdentity),
+}
+
+/// One declared thing in a bind-or-mint request: its declared key, its structural
+/// fingerprint, and its declared intent.
+#[derive(Archive, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct DeclaredIdentity {
+    pub key: DeclaredKey,
+    pub shape: DeclaredShape,
+    pub intent: IdentityIntent,
+}
+
+/// Whether the authority minted a fresh identity or bound an existing one — carried
+/// back for observability; the identity is authoritative either way.
+#[derive(Archive, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BindOutcome {
+    Minted,
+    Bound,
+}
+
+/// The authority's assignment for one declared thing: its key, the identity it now
+/// holds, and whether that identity was freshly minted or bound to an existing one.
+#[derive(Archive, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct IdentityAssignment {
+    pub key: DeclaredKey,
+    pub identity: TypeIdentity,
+    pub outcome: BindOutcome,
+}
+
+/// The authority's reply to a bind-or-mint: the schema-whole's minted universe and one
+/// assignment per requested declared thing, in request order.
+#[derive(Archive, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct BoundIdentities {
+    pub universe: MintedUniverse,
+    pub assignments: Vec<IdentityAssignment>,
+}
+
 #[derive(
     Archive, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash,
 )]
@@ -373,6 +482,14 @@ pub enum Request {
         scope: FixtureScope,
         count: u32,
     },
+    /// Bind-or-mint identities for a declared schema-whole against the central
+    /// authority: mint (or bind) the whole's universe, then for each declaration return
+    /// its existing identity (same thing) or a fresh one (new thing), enforcing the two
+    /// laws. Appended after `AllocateIdentifiers` so the wire encoding stays append-only.
+    BindIdentities {
+        whole: SchemaWholeHandle,
+        declarations: Vec<DeclaredIdentity>,
+    },
 }
 #[derive(Archive, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub enum Reply {
@@ -385,6 +502,9 @@ pub enum Reply {
         initial: Vec<SlotSummary>,
     },
     IdentifiersAllocated(IdentifierBlock),
+    /// The authority's bind-or-mint result: the whole's universe and per-declaration
+    /// identity assignments. Appended after `IdentifiersAllocated` (append-only wire).
+    IdentitiesBound(BoundIdentities),
     Rejected(Rejection),
     Event(ChangeEvent),
 }
@@ -396,6 +516,20 @@ pub enum Rejection {
     CountZero,
     IncompatibleWireVersion,
     Internal,
+    /// A bind-or-mint carried no declarations — the whole-level analogue of
+    /// `CountZero`; there is nothing to bind.
+    EmptyDeclarationSet,
+    /// A `Continue` intent named an identity the authority never issued. An identity
+    /// that does not exist cannot be continued.
+    IdentityNeverMinted(TypeIdentity),
+    /// Law 2 — an existing identity would be rebound to a structurally different
+    /// declared thing. A `Continue` intent claimed `identity`, but it already names a
+    /// thing of a different shape; rebinding it is a bug, so it is rejected.
+    IdentityRebindRejected {
+        identity: TypeIdentity,
+        bound_shape: DeclaredShape,
+        attempted_shape: DeclaredShape,
+    },
 }
 
 #[derive(Debug, thiserror::Error)]

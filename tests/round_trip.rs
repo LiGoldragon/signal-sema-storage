@@ -1,5 +1,9 @@
 use signal_frame::{HandshakeReply, ProtocolVersion, SIGNAL_FRAME_PROTOCOL_VERSION};
-use signal_sema_storage::{ContentHash, FixtureScope, FrameMessage, Request, Wire};
+use signal_sema_storage::{
+    BindOutcome, BoundIdentities, ContentHash, DeclaredIdentity, DeclaredKey, DeclaredShape,
+    FixtureScope, FrameMessage, IdentityAssignment, IdentityIntent, MintedUniverse, Rejection,
+    Reply, Request, SchemaWholeHandle, TypeIdentity, Wire,
+};
 #[test]
 fn request_has_stable_typed_binary_encoding() {
     let request = Request::HashFetch {
@@ -8,6 +12,62 @@ fn request_has_stable_typed_binary_encoding() {
     let bytes = Wire::encode_request(&request).expect("encode");
     let decoded = rkyv::from_bytes::<Request, rkyv::rancor::Error>(&bytes).expect("decode");
     assert_eq!(decoded, request);
+}
+
+#[test]
+fn bind_identities_request_round_trips() {
+    let request = Request::BindIdentities {
+        whole: SchemaWholeHandle(b"payments/v1".to_vec()),
+        declarations: vec![
+            DeclaredIdentity {
+                key: DeclaredKey(b"Alpha".to_vec()),
+                shape: DeclaredShape([1; 32]),
+                intent: IdentityIntent::MintOrBind,
+            },
+            DeclaredIdentity {
+                key: DeclaredKey(b"Beta".to_vec()),
+                shape: DeclaredShape([2; 32]),
+                intent: IdentityIntent::Continue(TypeIdentity(4)),
+            },
+        ],
+    };
+    let bytes = Wire::encode_request(&request).expect("encode");
+    let decoded = rkyv::from_bytes::<Request, rkyv::rancor::Error>(&bytes).expect("decode");
+    assert_eq!(decoded, request);
+}
+
+#[test]
+fn bound_identities_reply_round_trips() {
+    let reply = Reply::IdentitiesBound(BoundIdentities {
+        universe: MintedUniverse(9),
+        assignments: vec![
+            IdentityAssignment {
+                key: DeclaredKey(b"Alpha".to_vec()),
+                identity: TypeIdentity(0),
+                outcome: BindOutcome::Minted,
+            },
+            IdentityAssignment {
+                key: DeclaredKey(b"Beta".to_vec()),
+                identity: TypeIdentity(1),
+                outcome: BindOutcome::Bound,
+            },
+        ],
+    });
+    let bytes = Wire::encode_reply(&reply).expect("encode");
+    let decoded = rkyv::from_bytes::<Reply, rkyv::rancor::Error>(&bytes).expect("decode");
+    assert_eq!(decoded, reply);
+}
+
+#[test]
+fn identity_rebind_rejection_round_trips() {
+    let reply = Reply::Rejected(Rejection::IdentityRebindRejected {
+        identity: TypeIdentity(3),
+        bound_shape: DeclaredShape([7; 32]),
+        attempted_shape: DeclaredShape([8; 32]),
+    });
+    let bytes = Wire::encode_reply(&reply).expect("encode");
+    let decoded = rkyv::from_bytes::<Reply, rkyv::rancor::Error>(&bytes).expect("decode");
+    assert_eq!(decoded, reply);
 }
 #[test]
 fn fixture_scope_is_explicit() {
