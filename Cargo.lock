@@ -115,7 +115,7 @@ dependencies = [
 [[package]]
 name = "core-schema"
 version = "0.1.0"
-source = "git+https://github.com/LiGoldragon/core-schema.git?rev=b08351167283257a4b2a4d52048d77b42e3a79c7#b08351167283257a4b2a4d52048d77b42e3a79c7"
+source = "git+https://github.com/LiGoldragon/core-schema.git?rev=8507b6562d980a24dd8aada9e23f9ae7ef08920a#8507b6562d980a24dd8aada9e23f9ae7ef08920a"
 dependencies = [
  "content-identity",
  "name-table",
