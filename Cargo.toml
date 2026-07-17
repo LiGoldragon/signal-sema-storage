@@ -9,7 +9,7 @@ description="Typed wire contract for the central language-engine Sema storage da
 [dependencies]
 rkyv={version="0.8",features=["bytecheck"]}
 content-identity={git="https://github.com/LiGoldragon/content-identity.git",rev="6cc0408cdb96f174cc8fdf6ca23420038de28450"}
-core-schema={git="https://github.com/LiGoldragon/core-schema.git",rev="72d1c98596f2bba96a80d8c75b16780c4a0dfefe"}
+core-schema={git="https://github.com/LiGoldragon/core-schema.git",rev="b08351167283257a4b2a4d52048d77b42e3a79c7"}
 signal-frame={git="https://github.com/LiGoldragon/signal-frame.git",rev="f46872e7e8edae5264c892443d415a273b231234",default-features=false}
 core-logos={git="https://github.com/LiGoldragon/core-logos.git",rev="4edf5de942105a1b870f8738968a9d141a4304cc"}
 name-table={git="https://github.com/LiGoldragon/name-table.git",rev="c3237f77c087e6feab49d6cf34971cebc14a11e6"}
