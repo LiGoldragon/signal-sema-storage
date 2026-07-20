@@ -1,8 +1,11 @@
+use core_logos::EncodedItem;
+use core_schema::FixtureFamily;
 use signal_frame::{HandshakeReply, ProtocolVersion, SIGNAL_FRAME_PROTOCOL_VERSION};
 use signal_sema_storage::{
     BindOutcome, BoundIdentities, ContentHash, DeclaredIdentity, DeclaredKey, DeclaredShape,
-    FixtureScope, FrameMessage, IdentityAssignment, IdentityIntent, MintedUniverse, Rejection,
-    Reply, Request, SchemaWholeHandle, TypeIdentity, Wire,
+    DocumentKey, DocumentKind, DocumentPayload, FixtureScope, FrameMessage, IdentityAssignment,
+    IdentityIntent, MintedUniverse, NameTableBytes, Rejection, Reply, Request, SchemaWholeHandle,
+    SlotIdentifier, TypeIdentity, Wire,
 };
 #[test]
 fn request_has_stable_typed_binary_encoding() {
@@ -69,6 +72,41 @@ fn identity_rebind_rejection_round_trips() {
     let decoded = rkyv::from_bytes::<Reply, rkyv::rancor::Error>(&bytes).expect("decode");
     assert_eq!(decoded, reply);
 }
+#[test]
+fn encoded_schema_and_logos_document_payloads_round_trip() {
+    let schema = FixtureFamily::build().schema().clone();
+    let payloads = [
+        (
+            DocumentKind::TypeSchema,
+            DocumentPayload::TypeSchema {
+                schema,
+                names: NameTableBytes(Vec::new()),
+            },
+        ),
+        (
+            DocumentKind::Logos,
+            DocumentPayload::Logos {
+                items: Vec::<EncodedItem>::new(),
+                names: NameTableBytes(Vec::new()),
+            },
+        ),
+    ];
+
+    for (kind, payload) in payloads {
+        let request = Request::Store {
+            key: DocumentKey {
+                scope: FixtureScope(1),
+                kind,
+                slot: SlotIdentifier(0),
+            },
+            payload,
+        };
+        let bytes = Wire::encode_request(&request).expect("encode");
+        let decoded = rkyv::from_bytes::<Request, rkyv::rancor::Error>(&bytes).expect("decode");
+        assert_eq!(decoded, request);
+    }
+}
+
 #[test]
 fn fixture_scope_is_explicit() {
     assert_eq!(FixtureScope(1).0, 1);

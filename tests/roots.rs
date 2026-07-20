@@ -7,9 +7,9 @@ use signal_sema_storage::{
 
 #[test]
 fn signal_contract_owns_stream_opens_and_belongs_laws() {
-    let contract = Identifier::new(0);
-    let stream = Identifier::new(1);
-    let operation = Identifier::new(2);
+    let contract = Identifier::Fixture(0);
+    let stream = Identifier::Fixture(1);
+    let operation = Identifier::Fixture(2);
     let root = SignalContractRoot {
         contract,
         streams: vec![StreamDeclaration { stream }],
@@ -22,8 +22,8 @@ fn signal_contract_owns_stream_opens_and_belongs_laws() {
 
 #[test]
 fn nexus_routes_only_between_declared_actors() {
-    let actor = Identifier::new(1);
-    let missing = Identifier::new(2);
+    let actor = Identifier::Fixture(1);
+    let missing = Identifier::Fixture(2);
     let root = NexusRuntimeRoot {
         actors: vec![NexusActorDeclaration { actor }],
         routes: vec![NexusRoute {
@@ -39,7 +39,7 @@ fn nexus_routes_only_between_declared_actors() {
 fn sema_alone_owns_versioned_families() {
     let root = SemaStorageRoot {
         families: vec![FamilyDeclaration {
-            family: Identifier::new(1),
+            family: Identifier::Fixture(1),
             layout_version: 0,
         }],
         names: NameTableBytes(Vec::new()),
@@ -50,9 +50,9 @@ fn sema_alone_owns_versioned_families() {
 #[test]
 fn names_are_excluded_from_root_identity() {
     let payload = DocumentPayload::SignalContract(SignalContractRoot {
-        contract: Identifier::new(0),
+        contract: Identifier::Fixture(0),
         streams: vec![StreamDeclaration {
-            stream: Identifier::new(1),
+            stream: Identifier::Fixture(1),
         }],
         opens: Vec::new(),
         belongs: Vec::new(),
@@ -66,7 +66,7 @@ fn names_are_excluded_from_root_identity() {
     assert_eq!(
         payload.content_hash().expect("hash original"),
         renamed.content_hash().expect("hash renamed"),
-        "NameTable bytes are projection data, not Core identity"
+        "NameTable bytes are projection data, not encoded-form identity"
     );
 }
 
@@ -74,7 +74,7 @@ fn names_are_excluded_from_root_identity() {
 fn structural_edits_move_root_identity() {
     let payload = DocumentPayload::SemaStorage(SemaStorageRoot {
         families: vec![FamilyDeclaration {
-            family: Identifier::new(1),
+            family: Identifier::Fixture(1),
             layout_version: 1,
         }],
         names: NameTableBytes(Vec::new()),
