@@ -2,8 +2,8 @@
 use std::collections::BTreeSet;
 
 use content_identity::{DomainSeparation, HashDomain, IdentityHasher, LayoutVersion};
-use core_logos::CoreItem;
-use core_schema::CoreSchema;
+use core_logos::EncodedItem;
+use core_schema::EncodedSchema;
 use name_table::Identifier;
 use rkyv::{Archive, Deserialize, Serialize};
 use signal_frame::{
@@ -17,7 +17,11 @@ impl HashDomain for DocumentPayloadDomain {
     fn separation() -> DomainSeparation {
         DomainSeparation::Contextual {
             context: "language-engine/document-payload",
-            layout: LayoutVersion::new(1),
+            // Layout 2 carries namespace-variant Identifiers from the shared
+            // NameTable, replacing this wire contract's former flat identifier
+            // representation. Every archived root can contain an Identifier, so the
+            // archived representation and its content identity change truthfully.
+            layout: LayoutVersion::new(2),
         }
     }
 }
@@ -75,7 +79,7 @@ pub struct SchemaWholeHandle(pub Vec<u8>);
 /// A minted universe identity: a globally-unique, never-reused compact u32 the
 /// authority allocates per schema-whole, the authoritative universe-id path replacing
 /// the `FIXTURE_UNIVERSE(0)` placeholder (v2 L5). Maps directly onto core-schema's
-/// `CoreUniverseId`.
+/// `EncodedUniverseId`.
 #[derive(
     Archive, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash,
 )]
@@ -102,7 +106,7 @@ pub struct DeclaredKey(pub Vec<u8>);
 pub struct DeclaredShape(pub [u8; 32]);
 
 /// The assigned local identity of one declared thing within its universe — the
-/// `local` half of core-schema's `ScopedCoreTypeId`. Compact and never reused within a
+/// `local` half of core-schema's `ScopedEncodedTypeId`. Compact and never reused within a
 /// universe.
 #[derive(
     Archive, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash,
@@ -182,6 +186,28 @@ pub struct DocumentKey {
 
 #[derive(Archive, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct NameTableBytes(pub Vec<u8>);
+
+/// The validated core-schema archive carried by this storage wire contract.
+///
+/// `EncodedSchema` deliberately has no public rkyv implementation: its producer
+/// keeps the archive DTO private so every load validates the schema relation law.
+/// This wrapper is the only storable schema representation here. It is created from
+/// core-schema's canonical archive and decoded back through its validated boundary.
+#[derive(Archive, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct EncodedSchemaArchive(Vec<u8>);
+
+impl EncodedSchemaArchive {
+    pub fn from_schema(schema: &EncodedSchema) -> Result<Self, CodecError> {
+        schema
+            .to_archive_bytes()
+            .map(|bytes| Self(bytes.to_vec()))
+            .map_err(CodecError::SchemaArchive)
+    }
+
+    pub fn to_schema(&self) -> Result<EncodedSchema, CodecError> {
+        EncodedSchema::from_archive_bytes(&self.0).map_err(CodecError::SchemaArchive)
+    }
+}
 
 #[derive(Archive, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct StreamDeclaration {
@@ -288,13 +314,13 @@ impl SemaStorageRoot {
 }
 
 #[derive(Archive, Serialize)]
-struct SignalContractCore {
+struct SignalContractIdentity {
     contract: Identifier,
     streams: Vec<StreamDeclaration>,
     opens: Vec<OpensRelation>,
     belongs: Vec<BelongsRelation>,
 }
-impl From<&SignalContractRoot> for SignalContractCore {
+impl From<&SignalContractRoot> for SignalContractIdentity {
     fn from(root: &SignalContractRoot) -> Self {
         Self {
             contract: root.contract,
@@ -306,11 +332,11 @@ impl From<&SignalContractRoot> for SignalContractCore {
 }
 
 #[derive(Archive, Serialize)]
-struct NexusRuntimeCore {
+struct NexusRuntimeIdentity {
     actors: Vec<NexusActorDeclaration>,
     routes: Vec<NexusRoute>,
 }
-impl From<&NexusRuntimeRoot> for NexusRuntimeCore {
+impl From<&NexusRuntimeRoot> for NexusRuntimeIdentity {
     fn from(root: &NexusRuntimeRoot) -> Self {
         Self {
             actors: root.actors.clone(),
@@ -320,10 +346,10 @@ impl From<&NexusRuntimeRoot> for NexusRuntimeCore {
 }
 
 #[derive(Archive, Serialize)]
-struct SemaStorageCore {
+struct SemaStorageIdentity {
     families: Vec<FamilyDeclaration>,
 }
-impl From<&SemaStorageRoot> for SemaStorageCore {
+impl From<&SemaStorageRoot> for SemaStorageIdentity {
     fn from(root: &SemaStorageRoot) -> Self {
         Self {
             families: root.families.clone(),
@@ -352,7 +378,7 @@ pub enum NomosPackage {
 #[derive(Archive, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub enum DocumentPayload {
     TypeSchema {
-        schema: CoreSchema,
+        schema: EncodedSchemaArchive,
         names: NameTableBytes,
     },
     SignalContract(SignalContractRoot),
@@ -360,7 +386,7 @@ pub enum DocumentPayload {
     SemaStorage(SemaStorageRoot),
     Nomos(NomosPackage),
     Logos {
-        items: Vec<CoreItem>,
+        items: Vec<EncodedItem>,
         names: NameTableBytes,
     },
 }
@@ -395,15 +421,15 @@ impl DocumentPayload {
             }
             Self::SignalContract(root) => {
                 hasher.update_raw(&[1]);
-                Self::hash_archived(&mut hasher, &SignalContractCore::from(root))?;
+                Self::hash_archived(&mut hasher, &SignalContractIdentity::from(root))?;
             }
             Self::NexusRuntime(root) => {
                 hasher.update_raw(&[2]);
-                Self::hash_archived(&mut hasher, &NexusRuntimeCore::from(root))?;
+                Self::hash_archived(&mut hasher, &NexusRuntimeIdentity::from(root))?;
             }
             Self::SemaStorage(root) => {
                 hasher.update_raw(&[3]);
-                Self::hash_archived(&mut hasher, &SemaStorageCore::from(root))?;
+                Self::hash_archived(&mut hasher, &SemaStorageIdentity::from(root))?;
             }
             Self::Nomos(package) => {
                 hasher.update_raw(&[4]);
@@ -534,6 +560,8 @@ pub enum Rejection {
 
 #[derive(Debug, thiserror::Error)]
 pub enum CodecError {
+    #[error("schema archive: {0}")]
+    SchemaArchive(#[source] core_schema::EncodedSchemaLoadError),
     #[error("encode: {0}")]
     Encode(String),
     #[error("decode: {0}")]
